@@ -1,0 +1,201 @@
+---
+title: "Final Project"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, message=FALSE}
+library(tidyverse)
+library(ggplot2)
+library(caret)
+library(dplyr)
+library(tidymodels)
+library(lightgbm)
+```
+
+LightGBM
+
+LQ_1EQL: 운동능력(걷기) 
+
+<데이터 변수 정리, train/test split>
+
+```{r}
+hn19 <- haven::read_sas("HN19_ALL.sas7bdat")
+
+data <- hn19 %>%
+  filter(LQ_1EQL %in% c(1, 2, 3) & age >= 19 & age < 80 & ainc > 17 & ainc < 1500 & MH1_yr != 9 & educ != 99 & EC1_1 != 9 & BD7_5 != 9 & BP1 != 9 & BP5 != 9 & BE3_71 != 9 & BE3_31 != 99 & BE5_1 != 9 & BE3_85 != 9 & marri_2 %in% c(1, 2, 3, 4) & BP16_1 != 99) %>%
+  select(sex, age, incm, educ, ainc, D_1_1, DM1_dg, DM4_dg, DM8_dg, AC1_yr, MH1_yr, EC1_1, BE3_71, HE_BMI, BE3_31, BE5_1, BE3_71,          BE3_85, DF2_pr, marri_2, LQ4_00, BP16_1, BP5, BP1, BD7_5, LQ_1EQL, LQ_2EQL, LQ_3EQL, LQ_4EQL, LQ_5EQL) %>%
+  mutate(ifelse(DF2_pr, 8, 0, 1)
+         )
+
+data <- na.omit(data)
+
+data <- data %>%
+  filter(LQ_1EQL %in% c(1, 2, 3) & age >= 19 & age < 80 & ainc > 17 & ainc < 1500 & MH1_yr != 9 & educ != 99 & EC1_1 != 9) %>%
+  select(sex, age, incm, educ, ainc, D_1_1, DM1_dg, DM4_dg, DM8_dg, AC1_yr, MH1_yr, EC1_1, BE3_71, HE_BMI, LQ_1EQL) %>%
+  mutate(LQ_1EQL = as.numeric(LQ_1EQL),
+         LQ_1EQL = case_when(
+         LQ_1EQL == 1 ~ 0,
+         LQ_1EQL == 2 ~ 1,
+         LQ_1EQL == 3 ~ 2)
+)
+
+data <- na.omit(data)
+
+set.seed(1111)
+n <- nrow(data)
+data1_parts <- data %>%
+  initial_split(prop = 2/3)
+train <- data1_parts %>%
+  training()
+test <- data1_parts %>%
+testing()
+
+nrow(train)
+nrow(test)
+```
+
+LightGBM
+
+1) data
+
+```{r}
+train <- as.matrix(train)
+test <- as.matrix(test)
+lgb.train = lgb.Dataset(data=train[,-15], label=train[,15])
+```
+
+
+2) grid
+
+```{r}
+lgb.grid = list(objective = "multiclass",
+                num_class = 3,
+                min_data=1,
+                metric = "multi_logloss",
+                learning_rate = 0.8,
+                max_depth = 2,
+                num_leaves = 2)
+```
+
+3) CV
+
+```{r}
+set.seed(1111)
+
+lgb.model.cv <- lgb.cv(params = lgb.grid, data = lgb.train,
+                  nfold= 5)
+
+best_iter = lgb.model.cv$best_iter
+best_iter
+```
+
+best_iter = 49
+
+4) model
+```{r}
+set.seed(1111)
+lgb.model = lgb.train(lgb.grid,
+                  lgb.train,
+                  nrounds = 49)
+```
+
+
+5) Accuracy
+
+```{r}
+predict_value <- predict(lgb.model, as.matrix(test[, -15]), reshape = TRUE)
+
+predict_value %>%
+  head()
+```
+여기서 나오는 것은 각 클래스에 속할 확률
+
+
+```{r}
+preds = c()
+
+for (i in 1:nrow(predict_value)){
+    row = predict_value[i,] 
+    max_val = max(row) 
+    preds[i] = match(max_val, row) - 1
+}
+
+preds = factor(preds, level = c(0, 1, 2))
+
+confusionMatrix(as.factor(test[, 15]), preds)
+```
+
+Accuracy : 0.8765
+
+5) model, plot importance
+```{r}
+lgb.importance(lgb.model, percentage = TRUE)
+```
+
+* importance가 높은 변수만 8개 select
+
+```{r}
+
+data2 <- data %>%
+  select(age, D_1_1, ainc, educ,DM1_dg, EC1_1, AC1_yr, HE_BMI, LQ_1EQL) %>%
+
+data2 <- na.omit(data2)
+
+set.seed(1111)
+n <- nrow(data2)
+data2_parts <- data2 %>%
+  initial_split(prop = 2/3)
+train2 <- data2_parts %>%
+  training()
+test2 <- data2_parts %>%
+testing()
+
+nrow(train2)
+nrow(test2)
+```
+
+
+```{r}
+train2 <- as.matrix(train2)
+test2 <- as.matrix(test2)
+lgb.train2 = lgb.Dataset(data=train2[,-13], label=train2[,13])
+```
+
+```{r}
+set.seed(1111)
+
+lgb.model.cv2 = lgb.cv(params = lgb.grid, data = lgb.train2,
+                  nfold= 5)
+
+best_iter2 = lgb.model.cv2$best_iter
+best_iter2
+```
+Best_iter = 39
+```{r}
+set.seed(1111)
+lgb.model2 = lgb.train(lgb.grid,
+                  lgb.train2,
+                  nrounds = 39)
+```
+
+```{r}
+predict_value2 <- predict(lgb.model2, as.matrix(test2[, -13]), reshape = TRUE)
+
+preds2 = c()
+
+for (i in 1:nrow(predict_value2)){
+    row = predict_value2[i,] 
+    max_val = max(row) 
+    preds2[i] = match(max_val, row) - 1
+}
+
+preds2 <- as.factor(preds2)
+
+confusionMatrix(as.factor(test2[, 13]), preds2)
+```
+
+Accuray: 0.8846 -> 증가

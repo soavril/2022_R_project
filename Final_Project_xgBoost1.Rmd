@@ -1,0 +1,231 @@
+---
+title: "Final Project"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, message=FALSE}
+library(tidyverse)
+library(ggplot2)
+library(caret)
+library(dplyr)
+library(tidymodels)
+library(xgboost)
+library(data.table)
+```
+
+xgboost
+
+LQ_1EQL: 운동능력(걷기) 
+
+age: 나이(Ratio Variable)
+incm: 개인 소득 4분위수(Ordinal Variable) 숫자 1이 커지는게 같지 않다. --> 양적변수로 취급
+educ: 세부 교육 수준 (Ordinal Variable) 숫자 1이 커지는게 같지 않다.
+ainc: 월평균 가구소득(Ratio Variable)
+D_1_1: 주관적인 건강인지(Nominal Variable) (vs Ordinal Variable) --> 양적변수로 일단 해보기로
+DM1_dg: 관절염(Nominal Variable)
+DM4_dg: 골다골증(Nominal Variable)
+DM8_dg: 통풍 (Nominal Variable)
+AC1_yr: 1년간 손상 발생 여부 (Nominal Variable)
+MH1_yr: 1년간 입원 여부 (Nominal Variable)
+EC1_1: 경제활동 상태 (Nominal Variable)
+BE3_71: 고강도 신체활동 여부 (Nominal Variable)
+HE_BMI: 체질량 지수 (Ratio Variable)
+
+<데이터 변수 정리, train/test split>
+
+```{r}
+hn19 <- haven::read_sas("HN19_ALL.sas7bdat")
+
+data <- hn19 %>%
+  filter(LQ_1EQL %in% c(1, 2, 3) & age >= 19 & age < 80 & ainc > 17 & ainc < 1500 & MH1_yr != 9 & educ != 99 & EC1_1 != 9 & BD7_5 != 9 & BP1 != 9 & BP5 != 9 & BE3_71 != 9 & BE3_31 != 99 & BE5_1 != 9 & BE3_85 != 9 & marri_2 %in% c(1, 2, 3, 4) & BP16_1 != 99) %>%
+  select(sex, age, incm, educ, ainc, D_1_1, DM1_dg, DM4_dg, DM8_dg, AC1_yr, MH1_yr, EC1_1, BE3_71, HE_BMI, BE3_31, BE5_1, BE3_71,          BE3_85, DF2_pr, marri_2, LQ4_00, BP16_1, BP5, BP1, BD7_5, LQ_1EQL, LQ_2EQL, LQ_3EQL, LQ_4EQL, LQ_5EQL) %>%
+  mutate(DF2_pr = case_when(DF2_pr == 8 ~ 0)
+         )
+
+data <- na.omit(data)
+
+data <- data %>%
+  filter(LQ_1EQL %in% c(1, 2, 3) & age >= 19 & age < 80 & ainc > 17 & ainc < 1500 & MH1_yr != 9 & educ != 99 & EC1_1 != 9) %>%
+  select(sex, age, incm, educ, ainc, D_1_1, DM1_dg, DM4_dg, DM8_dg, AC1_yr, MH1_yr, EC1_1, BE3_71, HE_BMI, LQ_1EQL) %>%
+  mutate(
+         LQ_1EQL = case_when(
+         LQ_1EQL == 1 ~ 0,
+         LQ_1EQL == 2 ~ 1,
+         LQ_1EQL == 3 ~ 2))
+
+
+set.seed(1111)
+n <- nrow(data)
+data1_parts <- data %>%
+  initial_split(prop = 2/3)
+train <- data1_parts %>%
+  training()
+test <- data1_parts %>%
+testing()
+
+nrow(train)
+nrow(test)
+```
+
+
+LightGBM
+
+1) data
+
+```{r}
+train <- as.matrix(train)
+test <- as.matrix(test)
+dtrain <- xgb.DMatrix(data = train[, -15], label= train[, 15])
+```
+
+
+2) param
+
+```{r}
+param <- list(eta = 0.05,
+              max_depth = 6,
+              objective="multi:softprob",
+              eval_metric="mlogloss",
+              num_class = 3,
+              subsample=0.8, colsample_bytree=0.8)
+```
+
+3) CV
+
+```{r}
+set.seed(1111)
+
+cv.nround = 1000
+cv.nfold = 5
+
+xgb.model.cv <- xgb.cv(data=dtrain, params = param,
+                nfold=cv.nfold, nrounds=cv.nround,
+                verbose = 0)
+
+xgb.model.cv$evaluation_log[, .SD[which.min(test_mlogloss_mean)]]
+```
+
+best_iter = 109
+
+
+4) model
+```{r}
+set.seed(1111)
+xgb.model = xgboost(data = dtrain, 
+                  params = param,
+                  nrounds=109,
+                  verbose=0)
+```
+
+
+5) Accuracy
+
+```{r}
+predict_value <- predict(xgb.model, as.matrix(test[, -15]), reshape = TRUE)
+
+predict_value %>%
+  head()
+```
+여기서 나오는 것은 각 클래스에 속할 확률
+
+
+```{r}
+preds = c()
+
+for (i in 1:nrow(predict_value)){
+    row = predict_value[i,] 
+    max_val = max(row) 
+    preds[i] = match(max_val, row) - 1
+}
+
+preds = factor(preds, level = c(0, 1, 2))
+
+confusionMatrix(as.factor(test[, 15]), preds)
+```
+
+```{r}
+preds
+```
+
+Accuracy : 0.8769 --> 데이터 수가 적어서 lightGBM보다 좋은 거 같다.
+
+5) model, plot importance
+```{r}
+xgb.importance(model = xgb.model)
+```
+
+* importance가 높은 변수만 8개 select
+
+2. importance가 높은 8개 variable로 다시 Catboost
+```{r}
+data2 <- data %>%
+  select(ainc, HE_BMI, D_1_1, age, DM1_dg, educ, incm, MH1_yr, EC1_1, sex, AC1_yr, DM4_dg, LQ_1EQL)
+
+set.seed(1111)
+n <- nrow(data2)
+data2_parts <- data2 %>%
+  initial_split(prop = 2/3)
+train2 <- data2_parts %>%
+  training()
+test2 <- data2_parts %>%
+testing()
+
+nrow(train2)
+nrow(test2)
+```
+
+
+```{r}
+train2 <- as.matrix(train2)
+test2 <- as.matrix(test2)
+dtrain2 = xgb.DMatrix(data=train2[,-13], label=train2[,13])
+```
+
+```{r}
+set.seed(1111)
+
+cv.nround = 1000
+cv.nfold = 5
+
+xgb.model.cv2 <- xgb.cv(data=dtrain2, params = param,
+                nfold=cv.nfold, nrounds=cv.nround,
+                verbose = 0)
+
+xgb.model.cv2$evaluation_log[, .SD[which.min(test_mlogloss_mean)]]
+```
+
+Best_iter = 99
+
+```{r}
+set.seed(1111)
+xgb.model2 = xgboost(data = dtrain2, 
+                  params = param,
+                  nrounds=99,
+                  verbose=0)
+```
+
+```{r}
+predict_value2 <- predict(xgb.model2, as.matrix(test2[, -13]), reshape = TRUE)
+
+preds2 = c()
+
+for (i in 1:nrow(predict_value2)){
+    row = predict_value2[i,] 
+    max_val = max(row) 
+    preds2[i] = match(max_val, row) - 1
+}
+
+preds2 = factor(preds2, level = c(0, 1, 2))
+
+confusionMatrix(as.factor(test2[, 13]), preds2)
+```
+ 
+Accuray: 0.8867 -> 증가
+
+```{r}
+write.csv(preds2,"pred_1.csv", row.names = FALSE)
+```

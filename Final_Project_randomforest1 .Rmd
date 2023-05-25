@@ -1,0 +1,191 @@
+---
+title: "Final Project"
+output: html_document
+date: '2022-12-04'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r,message=FALSE}
+library(tidyverse)
+library(ggplot2)
+library(caret)
+library(tidymodels)
+library(glmnet)
+library(rpart)
+library(parsnip)
+library(discrim)
+library(fpc)
+library(ggbiplot)
+library(dplyr)
+library(randomForest)
+```
+
+ver 12/03
+
+LQ_1EQL: 운동능력(걷기) 
+
+sex: 성별
+age: 나이(Ratio Variable)
+incm: 개인 소득 4분위수(Ordinal Variable) 숫자 1이 커지는게 같지 않다. --> 양적변수로 취급
+educ: 세부 교육 수준 (Ordinal Variable) 숫자 1이 커지는게 같지 않다.
+ainc: 월평균 가구소득(Ratio Variable)
+D_1_1: 주관적인 건강인지(Nominal Variable) (vs Ordinal Variable) --> 양적변수로 일단 해보기로
+DM1_dg: 관절염(Nominal Variable)
+DM4_dg: 골다골증(Nominal Variable)
+DM8_dg: 통풍 (Nominal Variable)
+AC1_yr: 1년간 손상 발생 여부 (Nominal Variable)
+MH1_yr: 1년간 입원 여부 (Nominal Variable)
+EC1_1: 경제활동 상태 (Nominal Variable)
+BE3_71: 고강도 신체활동 여부 (Nominal Variable)
+HE_BMI: 체질량 지수 (Ratio Variable)
+M_2_yr: 필요 의료서비스 미충족 여부(Nominal Variable)
+
+
+<데이터 변수 정리, train/test split>
+
+```{r}
+hn19 <- haven::read_sas("HN19_ALL.sas7bdat")
+
+data <- hn19 %>%
+  filter(LQ_1EQL %in% c(1, 2, 3) & age >= 19 & age < 80 & ainc > 17 & ainc < 1500 & MH1_yr != 9 & educ != 99 & EC1_1 != 9 & BD7_5 != 9 & BP1 != 9 & BP5 != 9 & BE3_71 != 9 & BE3_31 != 99 & BE5_1 != 9 & BE3_85 != 9 & marri_2 %in% c(1, 2, 3, 4) & BP16_1 != 99) %>%
+  select(sex, age, incm, educ, ainc, D_1_1, DM1_dg, DM4_dg, DM8_dg, AC1_yr, MH1_yr, EC1_1, BE3_71, HE_BMI, BE3_31, BE5_1, BE3_71,          BE3_85, DF2_pr, marri_2, LQ4_00, BP16_1, BP5, BP1, BD7_5, LQ_1EQL, LQ_2EQL, LQ_3EQL, LQ_4EQL, LQ_5EQL) %>%
+  mutate(ifelse(DF2_pr, 8, 0, 1)
+         )
+
+data <- na.omit(data)
+
+data <- data %>%
+  filter(LQ_1EQL %in% c(1, 2, 3) & age >= 19 & age < 80 & ainc > 17 & ainc < 1500 & MH1_yr != 9 & educ != 99 & EC1_1 != 9) %>%
+  select(sex, age, incm, educ, ainc, D_1_1, DM1_dg, DM4_dg, DM8_dg, AC1_yr, MH1_yr, EC1_1, BE3_71, HE_BMI, LQ_1EQL) %>%
+  mutate(LQ_1EQL = as.factor(LQ_1EQL))
+
+set.seed(1111)
+n <- nrow(data)
+data1_parts <- data %>%
+  initial_split(prop = 2/3)
+train <- data1_parts %>%
+  training()
+test <- data1_parts %>%
+testing()
+
+nrow(train)
+nrow(test)
+```
+
+1. Random forest ver2.
+
+1) control
+```{r}
+set.seed(1111)
+control <- trainControl(method='repeatedcv', number=5, repeats=5)
+```
+
+2) grid
+```{r}
+tunegrid <- expand.grid(.mtry = (1:10)) 
+```
+
+3) grid_search -> 오래걸림(주의)
+```{r}
+rf_gridsearch <- train(LQ_1EQL~., 
+                       data = train,
+                       method = 'rf',
+                       metric = 'Accuracy',
+                       tuneGrid = tunegrid,
+                       trControl = control)
+
+rf_gridsearch$finalModel
+rf_gridsearch
+```
+
+best mtry = 4
+trees = 500
+Accuracy: 0.8905
+
+4) model, predict 
+
+```{r}
+set.seed(1111)
+rf.model <- randomForest(LQ_1EQL ~ ., data=train, mtry = 4, trees = 500)
+
+predict_value <- predict(object = rf.model, newdata = test[, -15])
+
+confusionMatrix(test$LQ_1EQL, predict_value)
+```
+
+Accuracy: 0.8716
+
+
+5) variable importance
+
+```{r}
+importance <- varImp(rf.model, scale = FALSE)
+importance[order(importance$Overall, decreasing = TRUE), , drop=FALSE]
+```
+
+2. select 12 variable 한걸로 다시 
+```{r}
+data2 <- data %>%
+  select(ainc, HE_BMI, age, D_1_1, educ, DM1_dg, incm, EC1_1, sex, DM4_dg, AC1_yr, LQ_1EQL) %>%
+  mutate(LQ_1EQL = as.factor(LQ_1EQL))
+
+set.seed(1111)
+n <- nrow(data2)
+data2_parts <- data2 %>%
+  initial_split(prop = 2/3)
+train2 <- data2_parts %>%
+  training()
+test2 <- data2_parts %>%
+testing()
+
+nrow(train2)
+nrow(test2)
+```
+
+grid_search
+
+```{r}
+set.seed(1111)
+tunegrid2 <- expand.grid(.mtry = (1:7)) 
+
+rf_gridsearch2 <- train(LQ_1EQL~., 
+                       data = train2,
+                       method = 'rf',
+                       metric = 'Accuracy',
+                       tuneGrid = tunegrid2,
+                       trControl = control)
+
+```
+
+```{r}
+rf_gridsearch2$finalModel
+rf_gridsearch2
+```
+
+best mtry = 2
+trees = 500
+Accuracy: 0.8866
+
+model, predict
+```{r}
+set.seed(1111)
+rf.model2 <- randomForest(LQ_1EQL ~ ., data=train2, mtry = 2, trees = 500)
+
+predict_value2 <- predict(object = rf.model2, newdata = test2[, -12])
+
+confusionMatrix(test$LQ_1EQL, predict_value2)
+```
+
+Accuray: 0.8447 왜 더 적게 나올까....
+
+1. 상관 관계가 있는 특징들은 동등하거나 유사한 중요도를 부여받지만, 상관 관계가 있는 특징들 없이 만들어진 동일한 트리에 비해 전반적으로 중요성이 감소한다. --> 상관 관계가 적은 특징들이 제거 되어서 그럴 수도 있다. (EDA 필요)
+2. 일반적으로 랜덤 포레스트와 의사 결정 트리는 카디널리티가 높은 특징을 선호한다(트리는 이러한 유형의 변수에 편향된다).
+
+해설1: The general rule of thumb when using random forests is to include all observable data. The reason for this is that a priori, we don't know which features might influence the response and the model. Just because you found that there are only a handful of features which are strong influencers does not mean that the remaining features do not play some role in the model.
+
+So, you should stick with just including all features when training your random forest model. If certain features do not improve accuracy, they will be removed/ignored during training. You typically do not need to manually remediate by removing any features when training.
+
+해설2: Warning: Features that are deemed of low importance for a bad model (low cross-validation score) could be very important for a good model. Therefore it is always important to evaluate the predictive power of a model using a held-out set (or better with cross-validation) prior to computing importances. Permutation importance does not reflect to the intrinsic predictive value of a feature by itself but how important this feature is for a particular model.

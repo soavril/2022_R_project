@@ -1,0 +1,194 @@
+---
+title: "Final Project"
+output: html_document
+date: '2022-12-04'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, message=FALSE}
+library(tidyverse)
+library(ggplot2)
+library(caret)
+library(dplyr)
+library(catboost)
+library(tidymodels)
+```
+
+ver 12/07
+
+LQ_1EQL: 운동능력(걷기) 
+
+age: 나이(Ratio Variable)
+incm: 개인 소득 4분위수(Ordinal Variable) 숫자 1이 커지는게 같지 않다. --> 양적변수로 취급
+educ: 세부 교육 수준 (Ordinal Variable) 숫자 1이 커지는게 같지 않다.
+ainc: 월평균 가구소득(Ratio Variable)
+D_1_1: 주관적인 건강인지(Nominal Variable) (vs Ordinal Variable) --> 양적변수로 일단 해보기로
+DM1_dg: 관절염(Nominal Variable)
+DM4_dg: 골다골증(Nominal Variable)
+DM8_dg: 통풍 (Nominal Variable)
+AC1_yr: 1년간 손상 발생 여부 (Nominal Variable)
+MH1_yr: 1년간 입원 여부 (Nominal Variable)
+EC1_1: 경제활동 상태 (Nominal Variable)
+BE3_71: 고강도 신체활동 여부 (Nominal Variable)
+HE_BMI: 체질량 지수 (Ratio Variable)
+
+<데이터 변수 정리, train/test split>
+
+```{r}
+hn19 <- haven::read_sas("HN19_ALL.sas7bdat")
+
+data <- hn19 %>%
+  filter(LQ_1EQL %in% c(1, 2, 3) & age >= 19 & age < 80 & ainc > 17 & ainc < 1500 & MH1_yr != 9 & educ != 99 & EC1_1 != 9 & BD7_5 != 9 & BP1 != 9 & BP5 != 9 & BE3_71 != 9 & BE3_31 != 99 & BE5_1 != 9 & BE3_85 != 9 & marri_2 %in% c(1, 2, 3, 4) & BP16_1 != 99) %>%
+  select(sex, age, incm, educ, ainc, D_1_1, DM1_dg, DM4_dg, DM8_dg, AC1_yr, MH1_yr, EC1_1, BE3_71, HE_BMI, BE3_31, BE5_1, BE3_71,          BE3_85, DF2_pr, marri_2, LQ4_00, BP16_1, BP5, BP1, BD7_5, LQ_1EQL, LQ_2EQL, LQ_3EQL, LQ_4EQL, LQ_5EQL) %>%
+  mutate(DF2_pr = case_when(DF2_pr == 8 ~ 0)
+         )
+
+data <- na.omit(data)
+
+data <- data %>%
+  select(sex, age, incm, educ, ainc, D_1_1, DM1_dg, DM4_dg, DM8_dg, AC1_yr, MH1_yr, EC1_1, BE3_71, HE_BMI, LQ_1EQL) %>%
+  mutate(LQ_1EQL = as.factor(LQ_1EQL))
+
+
+set.seed(1111)
+n <- nrow(data)
+data1_parts <- data %>%
+  initial_split(prop = 2/3)
+train <- data1_parts %>%
+  training()
+test <- data1_parts %>%
+testing()
+
+nrow(train)
+nrow(test)
+```
+
+
+1) CV
+
+```{r}
+set.seed(1111)
+
+fit_control <- caret::trainControl(
+  method = "cv", 
+  number = 5, 
+  search = "random",
+  classProbs = FALSE
+)
+```
+
+2) grid set
+
+```{r}
+grid <- expand.grid(
+  depth = c(4, 6, 8),
+  learning_rate = 0.1,
+  l2_leaf_reg = 3.5,
+  rsm = 0.95,
+  border_count = 64,
+  iterations = 1000
+)
+```
+
+3) model
+
+```{r}
+train <- as.data.frame(as.matrix(train), stringsAsFactors=TRUE)
+test <- as.data.frame(as.matrix(test), stringsAsFactors=TRUE)
+```
+
+```{r, inclde = FALSE}
+set.seed(1111)
+
+model <- caret::train(
+  x = train[, -15],
+  y = train[, 15],
+  method = catboost.caret,
+  metric = "Accuracy",
+  maximize = TRUE,
+  preProc = NULL,
+  tuneGrid = grid, 
+  tuneLength = 30, 
+  trControl = fit_control,
+  metric_period = 200
+)
+```
+
+4) Accuracy
+```{r}
+predict_value <- predict(model,test[, -15])
+
+confusionMatrix(test$LQ_1EQL, predict_value)
+```
+Accuracy : 0.8825
+
+5) model, plot importance
+```{r}
+print(model)
+importance <- varImp(model, scale = FALSE)
+print(importance)
+plot(importance)
+```
+
+* importance가 높은 변수만 12개 select
+
+2. importance가 높은 12개 variable로 다시 Catboost
+```{r}
+data2 <- data %>%
+  select(age, educ, D_1_1, incm, ainc, EC1_1, DM1_dg, MH1_yr, sex, AC1_yr, DM4_dg, DM8_dg, LQ_1EQL) %>%
+  mutate(LQ_1EQL = as.factor(LQ_1EQL))
+
+data2 <- na.omit(data2)
+
+set.seed(1111)
+n <- nrow(data2)
+data2_parts <- data2 %>%
+  initial_split(prop = 2/3)
+train2 <- data2_parts %>%
+  training()
+test2 <- data2_parts %>%
+testing()
+
+nrow(train2)
+nrow(test2)
+```
+
+
+```{r}
+train2 <- as.data.frame(as.matrix(train2), stringsAsFactors=TRUE)
+test2 <- as.data.frame(as.matrix(test2), stringsAsFactors=TRUE)
+```
+
+```{r}
+set.seed(1111)
+
+model2 <- caret::train(
+  x = train2[, -13],
+  y = train2[, 13],
+  method = catboost.caret,
+  metric = "Accuracy",
+  maximize = TRUE,
+  preProc = NULL,
+  tuneGrid = grid, 
+  tuneLength = 30, 
+  trControl = fit_control,
+  metric_period = 200
+)
+```
+
+```{r}
+predict_value2 <- predict(model2, test2[, -13])
+
+confusionMatrix(test2$LQ_1EQL, predict_value2)
+```
+
+Accuracy : 0.903
+
+```{r}
+importance2 <- varImp(model2, scale = FALSE)
+print(importance2)
+plot(importance2)
+```
